@@ -1,0 +1,231 @@
+\documentclass[aspectratio=43,compress]{beamer}
+\usetheme{material}
+
+\usepackage{fontspec}
+\usepackage{xunicode,xltxtra}
+\usepackage[AutoFakeBold=true,AutoFakeSlant=true,CheckSingle=true,PlainEquation=true,PunctStyle=kaiming]{xeCJK}
+\defaultfontfeatures{Mapping=tex-text}
+\XeTeXlinebreaklocale "zh"
+\XeTeXlinebreakskip = 0pt plus 1pt minus 0.1pt
+\setCJKmainfont[BoldFont=SourceHanSansCN-Bold.otf,
+ItalicFont=SourceHanSansCN-Light.otf]
+{SourceHanSansCN-Regular.otf}
+\setCJKmonofont{Source Han Sans CN}
+\setCJKsansfont{Source Han Sans CN}
+\usepackage[english]{babel}
+\usepackage[T1]{fontenc}
+\usepackage{CJKfntef}
+
+\title{AI实现分享}
+\date{May 12, 2019}
+\author[dtcxzyw]{dtcxzyw}
+
+\useLightTheme
+\usePrimaryBlue
+\useAccentIndigo
+
+\begin{document}
+
+\begin{frame}
+\titlepage
+\end{frame}
+
+\begin{frame}{目录}
+\begin{card}
+\tableofcontents
+\end{card}
+\end{frame}
+
+\section{安全措施}
+\begin{frame}{安全措施}
+\begin{card}
+我的个性签名是——安全第一。
+
+由于我不会附加gdb到AI上调试，只能通过SDK的debug接口输出调试信息。
+
+下面从三个角度防范bug：
+\begin{itemize}
+    \item 执行时：拦截并报告无效操作，尽可能记录调用位置。
+    \item 执行后：在下一次决策时检查上一次决策是否有效，统计性能信息
+    （掉帧过多，技能利用率过低都可能是bug引起的）
+    \item 无药可救时：吞下在计算过程中出现的异常，让AI尽可能在下一帧继续工作。
+\end{itemize}
+
+这些无关AI决策的代码帮助我快速发现并修复bug。
+\end{card}
+\end{frame}
+
+\begin{frame}
+\begin{card}[安全措施——执行时]
+将所有的执行指令集中到SafeOp名称空间中进行，它将检查每个参数的有效性。
+
+至于调用位置，C++20中有std::source\_location，调用时传进去。
+
+注意它并不能代替决策时对参数有效性的检查，要把它独立于AI逻辑之外。
+\end{card}
+\begin{card}[安全措施——执行后]
+存储上一帧的决策与调用方，检查该帧的状态是否为期望状态。
+
+此外还统计掉帧，检查行走是否被卡死，统计移动、火球、陨石阵的利用率。
+\end{card}
+\end{frame}
+
+\begin{frame}{安全措施——无药可救时}
+\begin{card}[C++ Exception]
+以帧为处理粒度，在playerAI函数套一个就完事了。
+\end{card}
+\begin{card}[signal]
+段错误会触发SIGSEGV信号，可以替换信号处理函数。
+\end{card}
+\begin{card}[errno]
+对于数学函数的异常，只能在单帧处理结束后检查errno。
+\end{card}
+\end{frame}
+
+\section{AI决策相关}
+\subsection{局面分析}
+\begin{frame}{局面分析}
+\begin{card}
+分析全局局面对于决策是很有必要的。
+
+Analyzer提供了如下信息：
+\begin{itemize}
+\item 上一次bonus消失的时间
+\item 上一帧敌人移动的方向
+\item 检查单位向目标的行进速度是否过慢（用于突击）
+\item 列出最近攻击该单位的敌人编号
+\end{itemize}
+\end{card}
+\end{frame}
+
+\subsection{采样系统}
+\begin{frame}{采样系统}
+\begin{card}[起源]
+    当没有数学模型来指导决策怎么办？随机！！！
+
+    方法简单粗暴：随机满足要求的决策，选取估值最高的。
+\end{card}
+\begin{card}[进阶]
+    但是一堆if和for的嵌套好难写！！！还有更复杂的需求：
+    \begin{itemize}
+        \item 以一定概率忽视某一考虑项
+        \item 各类估值按照字典序比较
+        \item 尽可能选取满足某一条件的元素
+    \end{itemize}
+\end{card}
+\end{frame}
+
+\begin{frame}{GROES}
+\begin{card}
+将这些需求归类，我搞出了一个通用的采样系统！！！
+
+采样系统由3类估值函数组成：
+\begin{itemize}
+    \item request：强制要求，无视优先级
+    \item optional：可选要求，会被转换为estimate
+    \item estimate：估值，将Point映射为double，按照字典序比较
+\end{itemize}
+\end{card}
+\end{frame}
+
+\begin{frame}{GROES实现}
+\begin{card}
+感谢伟大的lambda、std::function、Templates和Proxy Classes！！！
+\CJKsout{但这并不能改变我将来转Rust的决定。}
+
+整个系统由PointSampler类维护，使用Generator来构造PointSampler，
+然后添加一堆的ROE描述需求，最后调用sample方法得到结果。
+
+像Parallel Patterns Library的一连串.then()，可以使用链式调用一句搞定sample。
+
+对于那些可有可无的需求，增加一个apply方法让lambda修改自己以避免打断链式调用。
+
+对于bonus这种需要精确降落的移动，可以通过hotPoint来引导选择。
+\end{card}
+\end{frame}
+
+\begin{frame}{GROES扩展}
+\begin{cardTiny}
+选择攻击/跟踪对象时，还有从一些id中选出一个或几个id的需求。
+
+再写一个DiscreteSampler来满足这个需求。
+\end{cardTiny}
+\begin{cardTiny}
+estimate的优先级不应过高，除非使用一些舍入/分段函数嵌套在外面。
+
+Sampler自带一些Helper~Function和重载运算符避免写lambda。
+
+Map和Attack模块提供了基本的Sampler以确保决策有效。
+
+它们的Generator使用的不是std::mt19937\_64而是Halton序列。
+序列生成代码是从我的CUDA软件渲染器上扒下来的。
+\end{cardTiny}
+\end{frame}
+
+\begin{frame}{GROES表达}
+\begin{cardTiny}
+是不是很像Scratch？？？
+\end{cardTiny}
+\centering
+\cardImg{example.png}{300.0pt}
+\end{frame}
+\subsection{任务分配}
+\begin{frame}{任务分配}
+\begin{card}
+经典的1-3-1分配，在输送单位安全时，空闲的单位会返回去输送新的水晶。
+
+bonus处的单位是永久职业的，不允许残血的单位到那里去送死。
+\end{card}
+\end{frame}
+\subsection{移动}
+\begin{frame}{移动}
+\begin{card}
+\begin{itemize}
+\item A*仅提供前进方向指导。
+\item 优先躲避meteor，其次是fireball。
+\item 有时会与己方单位/敌方单位保持距离。
+\item bonus处使用保守策略。
+\end{itemize}
+\end{card}
+\end{frame}
+\subsection{攻击}
+\begin{frame}{攻击}
+\begin{card}
+\begin{itemize}
+\item 以消灭敌人有生力量为目标。
+\item 尽可能同时影响到多个敌人。
+\item 选取近的敌人作为目标。
+\item meteor仅用于阻挡敌人前进。
+\item 在无法打到目标时，识别转角并封锁。
+\item bonus处使用保守策略。
+\end{itemize}
+\end{card}
+\end{frame}
+\subsection{未使用的idea}
+\begin{frame}{未使用的idea}
+\begin{card}
+\begin{itemize}
+    \item 远程扫射（看不出效果）
+    \item 预测攻击估值函数（准确率30\%以下）
+    \item 惰性分块Dijkstra（已被A*代替）
+    \item 寻找掩体（不会写）
+    \item 平行同步齐射（射速太慢）
+    \item 惯性预瞄（虽然惯性预测的准确率在60\%到80\%左右，但是剩下的miss
+    应该都是敌人躲火球的时候发生的）
+\end{itemize}
+\end{card}
+\end{frame}
+
+\section{End}
+\begin{frame}{End}
+\begin{card}
+感谢大家的聆听！
+
+感谢秦岳同学、吕紫剑同学在APIO、THUWC、THUSC上的宣传。
+
+该slides的模板：
+
+{\footnotesize \url{https://github.com/edasubert/beamerMaterialDesign}}
+\end{card}
+\end{frame}
+\end{document}
